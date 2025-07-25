@@ -144,8 +144,10 @@ class PyramidalExporter:
             
             # Prepare pages in level order (highest resolution first)
             pages = []
+            self.logger.info(f"Preparing {len(level_images)} pages for TIFF")
             for level in sorted(level_images.keys()):
                 image = level_images[level]
+                self.logger.info(f"Level {level} image shape: {image.shape}")
                 # Convert RGBA to RGB if needed for JPEG compression
                 if tiff_compression == "jpeg" and image.shape[2] == 4:
                     # Convert RGBA to RGB with white background
@@ -154,18 +156,40 @@ class PyramidalExporter:
                 else:
                     pages.append(image)
             
+            if not pages:
+                raise ValueError("No valid pages to save")
+                
             # Save with appropriate options
             save_kwargs = {
                 'compression': tiff_compression,
-                'tile': (256, 256),
-                'metadata': {'axes': 'YXC'},
-                'photometric': 'rgb'
+                'photometric': 'rgb',
+                'metadata': {'axes': 'YXC'}
             }
+            
+            # Add tiling only if compression supports it
+            if tiff_compression in ['lzw', 'zlib', None]:
+                save_kwargs['tile'] = (256, 256)
             
             # Remove None values
             save_kwargs = {k: v for k, v in save_kwargs.items() if v is not None}
             
-            tifffile.imwrite(output_path, pages, **save_kwargs)
+            # Save each page separately to avoid shape issues
+            if len(pages) == 1:
+                # Single page
+                tifffile.imwrite(output_path, pages[0], **save_kwargs)
+            else:
+                # Multi-page TIFF - save as separate pages
+                with tifffile.TiffWriter(output_path) as tiff_writer:
+                    for i, page in enumerate(pages):
+                        page_kwargs = save_kwargs.copy()
+                        if i == 0:
+                            # First page can have metadata
+                            pass
+                        else:
+                            # Subsequent pages should not repeat metadata
+                            page_kwargs.pop('metadata', None)
+                        
+                        tiff_writer.write(page, **page_kwargs)
             
             if progress_callback:
                 progress_callback(100, "Export complete")
