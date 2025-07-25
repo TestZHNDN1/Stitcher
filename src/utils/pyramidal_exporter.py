@@ -230,10 +230,15 @@ class PyramidalExporter:
             # Render each fragment
             for fragment in fragments:
                 try:
-                    fragment_image = self._load_and_transform_fragment(fragment, level)
+                    # Load fragment at full resolution first
+                    fragment_image = self._load_and_transform_fragment(fragment, 0)
                     if fragment_image is None:
                         self.logger.warning(f"Could not load fragment {fragment.name} at level {level}")
                         continue
+                    
+                    # Downsample the fragment image for this level
+                    if level > 0:
+                        fragment_image = self._downsample_image(fragment_image, level)
                         
                     self._composite_fragment_numpy(composite, fragment_image, fragment, bounds, level)
                     self.logger.debug(f"Composited fragment {fragment.name} at level {level}")
@@ -251,12 +256,12 @@ class PyramidalExporter:
     def _load_and_transform_fragment(self, fragment: Fragment, level: int) -> Optional[np.ndarray]:
         """Load fragment at specific level and apply transformations"""
         try:
-            # Load original image at specified level
+            # Load original image at full resolution (level 0)
             from ..core.image_loader import ImageLoader
             loader = ImageLoader()
             
-            # Load at the specified pyramid level
-            original_image = loader.load_image(fragment.file_path, level)
+            # Always load at level 0 (full resolution) since most TIFFs don't have true pyramid levels
+            original_image = loader.load_image(fragment.file_path, 0)
             if original_image is None:
                 return None
             
