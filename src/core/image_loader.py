@@ -77,42 +77,72 @@ class ImageLoader:
 
 
     def _load_tiff_image(self, file_path: str, level: int = 7) -> np.ndarray:
-        """Load TIFF image using OpenSlide, handling both standard and pyramidal TIFFs"""
+        """Load TIFF image using tifffile, handling both standard and pyramidal TIFFs"""
         try:
-            if OPENSLIDE_AVAILABLE:
-                # Try OpenSlide first (designed for whole slide images)
-                try:
-                    slide = openslide.OpenSlide(file_path)
-                except openslide.OpenSlideUnsupportedFormatError:
-                    # File not supported by OpenSlide, fall back to other methods
-                    raise Exception("Not supported by OpenSlide")
-                
-                # Check if the requested level exists
-                max_level = slide.level_count - 1
-                if level > max_level:
-                    level = max_level
+            # Use tifffile directly for pyramidal TIFFs
+            with tifffile.TiffFile(file_path) as tif:
+                if hasattr(tif, 'series') and tif.series:
+                    series = tif.series[0]
+                    if hasattr(series, 'levels') and len(series.levels) > 1:
+                        # Pyramidal TIFF
+                        max_level = len(series.levels) - 1
+                        if level > max_level:
+                            level = max_level
+                        
+                        print(f"Loading pyramidal TIFF {file_path} at level {level} (max level: {max_level})")
+                        
+                        # Read the specific level
+                        level_data = series.levels[level].asarray()
+                        
+                        # Convert to RGBA if needed
+                        if len(level_data.shape) == 2:
+                            # Grayscale to RGBA
+                            rgb = np.stack([level_data] * 3, axis=2)
+                            alpha = np.full(level_data.shape, 255, dtype=np.uint8)
+                            image_array = np.dstack([rgb, alpha])
+                        elif len(level_data.shape) == 3:
+                            if level_data.shape[2] == 3:
+                                # RGB to RGBA
+                                alpha = np.full(level_data.shape[:2], 255, dtype=np.uint8)
+                                image_array = np.dstack([level_data, alpha])
+                            elif level_data.shape[2] == 4:
+                                # Already RGBA
+                                image_array = level_data
+                            else:
+                                raise ValueError(f"Unsupported number of channels: {level_data.shape[2]}")
+                        else:
+                            raise ValueError(f"Unsupported image dimensions: {level_data.shape}")
+                        
+                        return image_array
+                    else:
+                        # Single level TIFF
+                        print(f"Loading single-level TIFF {file_path}")
+                        image_data = tif.asarray()
+                        
+                        # Convert to RGBA if needed
+                        if len(image_data.shape) == 2:
+                            rgb = np.stack([image_data] * 3, axis=2)
+                            alpha = np.full(image_data.shape, 255, dtype=np.uint8)
+                            image_array = np.dstack([rgb, alpha])
+                        elif len(image_data.shape) == 3:
+                            if image_data.shape[2] == 3:
+                                alpha = np.full(image_data.shape[:2], 255, dtype=np.uint8)
+                                image_array = np.dstack([image_data, alpha])
+                            elif image_data.shape[2] == 4:
+                                image_array = image_data
+                            else:
+                                raise ValueError(f"Unsupported number of channels: {image_data.shape[2]}")
+                        else:
+                            raise ValueError(f"Unsupported image dimensions: {image_data.shape}")
+                        
+                        return image_array
+                else:
+                    raise ValueError("No series found in TIFF file")
                     
-                print(f"Loading {file_path} at level {level} (max level: {max_level})")
-                
-                # Get the dimensions of the slide at the specified level
-                level_dimensions = slide.level_dimensions[level]
-                
-                # Read the entire slide at the specified level
-                # read_region(location, level, size) - location is (x, y) in level 0 coordinates
-                # For the entire slide, we start at (0, 0) and read the full dimensions
-                image = slide.read_region((0, 0), level, level_dimensions)
-                
-                # Convert PIL Image to numpy array
-                image_array = np.array(image)
-                
-                slide.close()
-            else:
-                raise ImportError("OpenSlide not available")
-            
         except Exception as e:
-            print(f"OpenSlide failed for {file_path}: {e}")
+            print(f"tifffile failed for {file_path}: {e}")
             
-            # Fallback to PIL
+            # Final fallback to PIL
             try:
                 image = Image.open(file_path)
                 # Preserve alpha channel if present
@@ -126,21 +156,6 @@ class ImageLoader:
             except Exception as pil_error:
                 print(f"PIL also failed for {file_path}: {pil_error}")
                 raise
-        
-        # Ensure RGBA format
-        if len(image_array.shape) == 2:
-            # Convert grayscale to RGBA
-            rgb = np.stack([image_array] * 3, axis=2)
-            alpha = np.full(image_array.shape, 255, dtype=np.uint8)
-            image_array = np.dstack([rgb, alpha])
-        elif len(image_array.shape) == 3:
-            if image_array.shape[2] == 3:
-                # Add alpha channel to RGB
-                alpha = np.full(image_array.shape[:2], 255, dtype=np.uint8)
-                image_array = np.dstack([image_array, alpha])
-            # If already RGBA (4 channels), keep as is
-        
-        return image_array
 
     
     def _load_standard_image(self, file_path: str) -> np.ndarray:

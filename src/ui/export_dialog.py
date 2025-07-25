@@ -224,26 +224,17 @@ class ExportDialog(QDialog):
         
     def get_pyramid_levels(self, file_path: str) -> List[int]:
         """Get available pyramid levels from a TIFF file"""
-        print("I'm here")
         try:
-            # Try OpenSlide first
-            import openslide
-            slide = openslide.OpenSlide(file_path)
-            levels = list(range(slide.level_count))
-            slide.close()
-            return levels
-        except Exception as e:
-            print(f"OpenSlide failed for {file_path}: {e}")
-            
-        # Fallback to tifffile
-        try:
+            # Use tifffile directly for TIFF files
             import tifffile
             with tifffile.TiffFile(file_path) as tif:
                 if hasattr(tif, 'series') and tif.series:
                     series = tif.series[0]
                     if hasattr(series, 'levels') and len(series.levels) > 1:
+                        # Pyramidal TIFF
                         return list(range(len(series.levels)))
                     else:
+                        # Single level TIFF
                         return [0]  # Single level
                 else:
                     return [0]  # Single level

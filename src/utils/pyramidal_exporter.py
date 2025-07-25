@@ -209,27 +209,38 @@ class PyramidalExporter:
         if not fragments:
             return None
             
-        # Calculate bounds at level 0 first, then scale for the target level
+        # Calculate bounds using the current fragment positions (which are at level 0 scale)
+        # Then scale appropriately for the target level
         min_x = min_y = float('inf')
         max_x = max_y = float('-inf')
         
         for fragment in fragments:
-            # Get fragment bounds at level 0 (using current transformations)
-            bbox = fragment.get_bounding_box()
+            # Load the fragment at the target level to get actual dimensions
+            try:
+                fragment_image = self._load_and_transform_fragment(fragment, level)
+                if fragment_image is None:
+                    continue
+                    
+                frag_h, frag_w = fragment_image.shape[:2]
+                
+                # Scale fragment position for this level
+                downsample = 2 ** level
+                scaled_x = fragment.x / downsample
+                scaled_y = fragment.y / downsample
+                
+                min_x = min(min_x, scaled_x)
+                min_y = min(min_y, scaled_y)
+                max_x = max(max_x, scaled_x + frag_w)
+                max_y = max(max_y, scaled_y + frag_h)
+                
+            except Exception as e:
+                self.logger.warning(f"Could not get bounds for fragment {fragment.name} at level {level}: {e}")
+                continue
             
-            min_x = min(min_x, bbox[0])
-            min_y = min(min_y, bbox[1])
-            max_x = max(max_x, bbox[0] + bbox[2])
-            max_y = max(max_y, bbox[1] + bbox[3])
-        
-        # Scale bounds for the target level
-        downsample = 2 ** level
-        scaled_bounds = (
-            min_x / downsample,
-            min_y / downsample,
-            max_x / downsample,
-            max_y / downsample
-        )
+        if min_x == float('inf'):
+            return None
+            
+        scaled_bounds = (min_x, min_y, max_x, max_y)
         
         self.logger.info(f"Level {level} bounds: {scaled_bounds}")
         return scaled_bounds
@@ -254,16 +265,12 @@ class PyramidalExporter:
             # Render each fragment
             for fragment in fragments:
                 try:
-                    # Load fragment at full resolution first
-                    fragment_image = self._load_and_transform_fragment(fragment, 0)
+                    # Load fragment at the specified pyramid level
+                    fragment_image = self._load_and_transform_fragment(fragment, level)
                     if fragment_image is None:
                         self.logger.warning(f"Could not load fragment {fragment.name} at level {level}")
                         continue
                     
-                    # Downsample the fragment image for this level
-                    if level > 0:
-                        fragment_image = self._downsample_image(fragment_image, level)
-                        
                     self._composite_fragment_numpy(composite, fragment_image, fragment, bounds, level)
                     self.logger.debug(f"Composited fragment {fragment.name} at level {level}")
                     
@@ -280,12 +287,12 @@ class PyramidalExporter:
     def _load_and_transform_fragment(self, fragment: Fragment, level: int) -> Optional[np.ndarray]:
         """Load fragment at specific level and apply transformations"""
         try:
-            # Load original image at full resolution (level 0)
+            # Load fragment at the specified pyramid level using tifffile
             from ..core.image_loader import ImageLoader
             loader = ImageLoader()
             
-            # Always load at level 0 (full resolution) since most TIFFs don't have true pyramid levels
-            original_image = loader.load_image(fragment.file_path, 0)
+            # Load at the specified level - tifffile will handle pyramid levels properly
+            original_image = loader.load_image(fragment.file_path, level)
             if original_image is None:
                 return None
             
@@ -368,9 +375,13 @@ class PyramidalExporter:
             min_x, min_y, _, _ = bounds
             downsample = 2 ** level
             
-            # Calculate position in composite (scaled for level)
-            frag_x = int((fragment.x - min_x * downsample) / downsample)
-            frag_y = int((fragment.y - min_y * downsample) / downsample)
+            # Calculate position in composite
+            # Fragment positions are at level 0 scale, so we need to scale them down
+            scaled_frag_x = fragment.x / downsample
+            scaled_frag_y = fragment.y / downsample
+            
+            frag_x = int(scaled_frag_x - min_x)
+            frag_y = int(scaled_frag_y - min_y)
             
             # Get dimensions
             frag_h, frag_w = fragment_image.shape[:2]
